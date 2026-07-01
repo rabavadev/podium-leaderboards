@@ -1,14 +1,32 @@
 import { PrismaClient } from "@prisma/client";
+import crypto from "crypto";
 
 const prisma = new PrismaClient();
 
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
 async function main() {
-  const slug = "chuckybtz";
-  await prisma.board.deleteMany({ where: { slug } });
+  const email = "demo@podium.local";
+  const password = "demopass123";
+
+  await prisma.user.deleteMany({ where: { email } });
+
+  const isPlatformAdmin =
+    !!process.env.PLATFORM_ADMIN_EMAIL &&
+    email === process.env.PLATFORM_ADMIN_EMAIL.trim().toLowerCase();
+
+  const user = await prisma.user.create({
+    data: { email, name: "Demo", passwordHash: hashPassword(password), isPlatformAdmin: isPlatformAdmin || true },
+  });
 
   const board = await prisma.board.create({
     data: {
-      slug,
+      ownerId: user.id,
+      slug: "chuckybtz",
       title: "ChuckyBTZ Leaderboard",
       subtitle: "Stake.com / Stake.us",
       description:
@@ -30,7 +48,6 @@ async function main() {
         kick: "https://kick.com",
         youtube: "https://youtube.com",
         twitch: "https://twitch.tv",
-        instagram: "https://instagram.com",
         discord: "https://discord.gg",
         telegram: "https://telegram.org",
       }),
@@ -53,9 +70,11 @@ async function main() {
     },
   });
 
-  console.log(`Seeded board /${board.slug} with a Stake-style demo leaderboard.`);
-  console.log(`Editor link token: ${board.editorToken}`);
-  console.log(`Ingest API key:    ${board.apiKey}`);
+  console.log("Seeded demo account + board.");
+  console.log(`  Login:  ${email} / ${password}`);
+  console.log(`  Board:  /${board.slug}`);
+  console.log(`  Editor: /edit/${board.editorToken}`);
+  console.log(`  ApiKey: ${board.apiKey}`);
 }
 
 main()

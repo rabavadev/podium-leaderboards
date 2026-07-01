@@ -1,95 +1,57 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
-import { createBoardAction, logoutAction, createCheckoutAction, createPortalAction } from "@/lib/actions";
-import { stripeEnabled, boardLimit } from "@/lib/stripe";
+import { getSessionUser } from "@/lib/auth";
+import { createBoardAction } from "@/lib/actions";
+import { boardLimitFor, PLANS } from "@/lib/plans";
+import { DashNav } from "@/components/DashNav";
 
 export const dynamic = "force-dynamic";
 
-const ERRORS: Record<string, string> = {
-  plan_limit: "You've reached your plan's board limit. Upgrade to Pro to create more.",
-  stripe_not_configured: "Payments aren't configured on this instance yet. Contact the host.",
-  checkout_failed: "Checkout could not be started.",
-  portal_failed: "Could not open the billing portal.",
-};
-
-export default async function DashboardPage({ searchParams }: { searchParams: { error?: string; upgrade?: string } }) {
-  const user = await getCurrentUser();
+export default async function Dashboard() {
+  const user = await getSessionUser();
   if (!user) redirect("/login");
 
   const boards = await prisma.board.findMany({
-    where: { userId: user.id },
+    where: { ownerId: user.id },
     orderBy: { updatedAt: "desc" },
     include: { _count: { select: { entries: true } } },
   });
 
-  const limit = boardLimit(user.plan);
-  const atLimit = !user.isHost && boards.length >= limit;
-  const isPro = user.plan === "pro";
+  const limit = boardLimitFor(user.plan);
+  const atLimit = boards.length >= limit;
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-12">
-      <header className="mb-10 flex items-center justify-between">
+    <main className="mx-auto max-w-3xl px-4 py-10">
+      <DashNav email={user.email} plan={user.plan} isPlatformAdmin={user.isPlatformAdmin} />
+
+      <div className="mb-6 flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-extrabold text-white">◆ Podium</h1>
+          <h1 className="text-2xl font-extrabold text-white">Your leaderboards</h1>
           <p className="text-sm text-slate-500">
-            Hi {user.name || user.email} · {user.isHost ? "Host" : isPro ? "Pro" : "Free"} plan
+            {boards.length} of {limit === Infinity ? "unlimited" : limit} used
           </p>
         </div>
-        <form action={logoutAction}>
-          <button className="btn-ghost text-sm" type="submit">Sign out</button>
-        </form>
-      </header>
+      </div>
 
-      {searchParams.error ? (
-        <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-          {ERRORS[searchParams.error] || "Something went wrong."}
-        </div>
-      ) : null}
-      {searchParams.upgrade === "success" ? (
-        <div className="mb-6 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
-          Thanks for upgrading! Your Pro plan is active.
-        </div>
-      ) : null}
-
-      {/* Billing card */}
       <section className="card mb-8 p-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="text-sm font-bold uppercase tracking-wide text-slate-300">Plan</div>
-            <div className="mt-1 text-lg font-bold text-white">
-              {isPro ? "Pro" : "Free"}{user.isHost ? " (host)" : ""}
-            </div>
-            <div className="text-xs text-slate-500">
-              {user.isHost ? "Unlimited boards" : `${boards.length} / ${limit === 999 ? "∞" : limit} boards used`}
-            </div>
+        <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-300">New board</h2>
+        {atLimit ? (
+          <div className="rounded-xl border border-gold-500/30 bg-gold-500/5 p-4 text-sm text-slate-300">
+            You&apos;ve hit the {PLANS.free.name} plan limit of {limit} board{limit === 1 ? "" : "s"}.{" "}
+            <Link href="/dashboard/billing" className="font-semibold text-gold-400 hover:underline">
+              Upgrade to Pro
+            </Link>{" "}
+            for unlimited leaderboards.
           </div>
-          {user.isHost ? (
-            <span className="text-xs text-slate-500">Hosts are always Pro.</span>
-          ) : isPro ? (
-            <form action={createPortalAction}>
-              <button className="btn-ghost text-sm" type="submit">Manage billing</button>
-            </form>
-          ) : stripeEnabled() ? (
-            <form action={createCheckoutAction}>
-              <button className="btn-gold text-sm" type="submit">Upgrade to Pro</button>
-            </form>
-          ) : (
-            <span className="text-xs text-slate-500">Billing not configured on this instance.</span>
-          )}
-        </div>
+        ) : (
+          <form action={createBoardAction} className="flex flex-col gap-3 sm:flex-row">
+            <input className="input" name="title" placeholder="Board title (e.g. ChuckyBTZ Leaderboard)" />
+            <input className="input sm:w-56" name="slug" placeholder="custom-slug (optional)" />
+            <button className="btn-gold whitespace-nowrap" type="submit">Create</button>
+          </form>
+        )}
       </section>
-
-      {/* Boards */}
-      <section className="mb-6 flex items-center justify-between">
-        <h2 className="text-sm font-bold uppercase tracking-wide text-slate-300">Your boards</h2>
-        {user.isHost ? (
-          <Link href="/host" className="text-xs text-gold-400 hover:underline">Host panel →</Link>
-        ) : null}
-      </section>
-
-      <CreateBoardForm atLimit={atLimit} />
 
       <div className="space-y-2">
         {boards.length === 0 ? (
@@ -106,7 +68,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: { 
                 </div>
               </div>
               <div className="flex gap-2">
-                <Link href={`/${b.slug}`} target="_blank" className="btn-ghost text-xs">View</Link>
+                <Link href={`/${b.slug}`} className="btn-ghost text-xs" target="_blank">View</Link>
                 <Link href={`/dashboard/boards/${b.id}`} className="btn-gold text-xs">Manage</Link>
               </div>
             </div>
@@ -114,23 +76,5 @@ export default async function DashboardPage({ searchParams }: { searchParams: { 
         )}
       </div>
     </main>
-  );
-}
-
-function CreateBoardForm({ atLimit }: { atLimit: boolean }) {
-  if (atLimit) {
-    return (
-      <div className="card mb-6 p-4 text-sm text-slate-400">
-        You've hit the Free plan limit (1 board).{" "}
-        <span className="text-gold-400">Upgrade to Pro for unlimited boards.</span>
-      </div>
-    );
-  }
-  return (
-    <form action={createBoardAction} className="card mb-6 flex flex-col gap-3 p-4 sm:flex-row">
-      <input className="input" name="title" placeholder="Board title (e.g. My Weekly Wager)" />
-      <input className="input sm:w-48" name="slug" placeholder="custom-slug (optional)" />
-      <button className="btn-gold whitespace-nowrap" type="submit">Create board</button>
-    </form>
   );
 }

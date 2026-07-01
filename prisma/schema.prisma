@@ -1,5 +1,5 @@
-// Podium — leaderboard hosting SaaS (subscription / multi-tenant)
-// Dev uses SQLite (zero setup). For production, switch provider to "postgresql".
+// Podium — multi-tenant leaderboard hosting SaaS
+// Dev uses SQLite (zero setup). For production switch provider to "postgresql".
 
 generator client {
   provider = "prisma-client-js"
@@ -11,26 +11,31 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  passwordHash  String
-  name          String   @default("")
-  // Stripe billing
-  stripeCustomerId        String?
-  stripeSubscriptionId    String?
-  stripeSubscriptionStatus String? // active, past_due, canceled, etc.
-  plan          String   @default("free") // "free" | "pro"
-  // The site operator: can see all boards + users at /host
-  isHost        Boolean  @default(false)
+  id                   String   @id @default(cuid())
+  email                String   @unique
+  passwordHash         String
+  name                 String   @default("")
 
-  boards        Board[]
+  // Billing / subscription
+  plan                 String   @default("free")     // "free" | "pro"
+  subscriptionStatus   String   @default("inactive") // active | trialing | past_due | canceled | inactive
+  stripeCustomerId     String?  @unique
+  stripeSubscriptionId String?
+  currentPeriodEnd     DateTime?
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  isPlatformAdmin      Boolean  @default(false)
+
+  boards               Board[]
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 }
 
 model Board {
   id          String   @id @default(cuid())
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId     String
+
   slug        String   @unique
   title       String
   subtitle    String   @default("")
@@ -46,12 +51,9 @@ model Board {
   prizePool   String   @default("")
   currency    String   @default("$")
   socials     String   @default("{}")
+
   maskNames   Boolean  @default(true)
   isPublic    Boolean  @default(true)
-
-  // Ownership (nullable so the seeded demo + legacy boards keep working)
-  owner       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  userId      String?
 
   editorToken String   @unique @default(cuid())
   apiKey      String   @unique @default(cuid())
@@ -60,6 +62,8 @@ model Board {
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([ownerId])
 }
 
 model Entry {

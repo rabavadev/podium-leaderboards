@@ -5,7 +5,8 @@ import { BoardEditor } from "@/components/BoardEditor";
 
 export const dynamic = "force-dynamic";
 
-function baseUrlFromHeaders(): string {
+function baseUrl(): string {
+  if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
   const h = headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? (host.includes("localhost") ? "http" : "https");
@@ -26,7 +27,7 @@ export default async function EditByToken({ params }: { params: { token: string 
       <p className="mb-6 text-sm text-slate-500">
         You can update entries and content for this board. Keep this link private.
       </p>
-      <BoardEditor board={board} entries={board.entries} canManageSocials={false} token={params.token} baseUrl={baseUrlFromHeaders()} />
+      <BoardEditor board={board} entries={board.entries} canManageSocials={false} token={params.token} baseUrl={baseUrl()} />
     </main>
   );
 }

@@ -10,12 +10,31 @@ function secret(): string {
   return process.env.SESSION_SECRET || "dev-insecure-secret-change-me";
 }
 
+/* ------------------------- password hashing (scrypt) ------------------------- */
+
+export function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+export function verifyPassword(password: string, stored: string): boolean {
+  const [salt, hash] = stored.split(":");
+  if (!salt || !hash) return false;
+  const test = crypto.scryptSync(password, salt, 64).toString("hex");
+  const a = Buffer.from(hash, "hex");
+  const b = Buffer.from(test, "hex");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/* ------------------------------- sessions ------------------------------- */
+
 function sign(value: string): string {
   const mac = crypto.createHmac("sha256", secret()).update(value).digest("hex");
   return `${value}.${mac}`;
 }
 
-function verify(signed: string | undefined): string | null {
+function unsign(signed: string | undefined): string | null {
   if (!signed) return null;
   const idx = signed.lastIndexOf(".");
   if (idx < 0) return null;
@@ -25,39 +44,12 @@ function verify(signed: string | undefined): string | null {
   try {
     if (crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) return value;
   } catch {
-    /* mismatch */
+    /* fallthrough */
   }
   return null;
 }
 
-/* ----------------- Password hashing (scrypt) ----------------- */
-
-export function hashPassword(plain: string): string {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(plain, salt, 64).toString("hex");
-  return `${salt}:${hash}`;
-}
-
-export function verifyPassword(plain: string, stored: string): boolean {
-  const [salt, hash] = stored.split(":");
-  if (!salt || !hash) return false;
-  const test = crypto.scryptSync(plain, salt, 64).toString("hex");
-  try {
-    return crypto.timingSafeEqual(Buffer.from(test), Buffer.from(hash));
-  } catch {
-    return false;
-  }
-}
-
-/* ----------------- Email validation ----------------- */
-
-export function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254;
-}
-
-/* ----------------- Sessions ----------------- */
-
-export async function startSession(userId: string) {
+export function startSession(userId: string) {
   cookies().set(COOKIE, sign(userId), {
     httpOnly: true,
     sameSite: "lax",
@@ -71,33 +63,12 @@ export function endSession() {
   cookies().delete(COOKIE);
 }
 
-export async function getCurrentUser(): Promise<User | null> {
-  const userId = verify(cookies().get(COOKIE)?.value);
-  if (!userId) return null;
-  return prisma.user.findUnique({ where: { id: userId } });
+export function getSessionUserId(): string | null {
+  return unsign(cookies().get(COOKIE)?.value);
 }
 
-export async function requireUser(): Promise<User> {
-  const u = await getCurrentUser();
-  if (!u) throw new Error("LOGIN_REQUIRED");
-  return u;
-}
-
-export async function isHost(): Promise<boolean> {
-  const u = await getCurrentUser();
-  return !!u?.isHost;
-}
-
-/** Used in server components (redirect on no user). */
-export async function requireUserOrRedirect(): Promise<User | null> {
-  return await getCurrentUser();
-}
-
-/** The host is: the user whose email matches HOST_EMAIL, OR the first user to
- *  ever sign up (bootstrap), OR a user already flagged isHost. */
-export async function shouldBecomeHost(email: string): Promise<boolean> {
-  const hostEmail = (process.env.HOST_EMAIL || "").trim().toLowerCase();
-  if (hostEmail && email.toLowerCase() === hostEmail) return true;
-  const count = await prisma.user.count();
-  return count === 0;
+export async function getSessionUser(): Promise<User | null> {
+  const id = getSessionUserId();
+  if (!id) return null;
+  return prisma.user.findUnique({ where: { id } });
 }
