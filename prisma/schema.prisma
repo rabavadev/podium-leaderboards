@@ -1,0 +1,72 @@
+// Podium — leaderboard hosting SaaS
+// Dev uses SQLite (zero setup). For production, switch provider to "postgresql"
+// and set DATABASE_URL to your Postgres connection string.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Board {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  subtitle    String   @default("")
+  // Long description / promo blurb shown under the header (supports plain line breaks)
+  description String   @default("")
+  rules       String   @default("")
+
+  // Branding / call to action
+  promoCode   String   @default("")
+  ctaText     String   @default("")
+  ctaUrl      String   @default("")
+  accentColor String   @default("#f5b301")
+  logoUrl     String   @default("")
+
+  // Prize pool shown in the header, e.g. "$3,500 Monthly"
+  prizePool   String   @default("")
+  currency    String   @default("$")
+
+  // Social links stored as JSON: { "discord": "https://...", "twitch": "..." }
+  socials     String   @default("{}")
+
+  // Should usernames be masked (t***t) on the public page?
+  maskNames   Boolean  @default(true)
+
+  isPublic    Boolean  @default(true)
+
+  // Delegated editing: share /edit/<editorToken> so someone can update entries
+  // without the master admin password.
+  editorToken String   @unique @default(cuid())
+  // Programmatic ingest: POST /api/ingest/<apiKey> to replace entries.
+  apiKey      String   @unique @default(cuid())
+
+  entries     Entry[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Entry {
+  id         String   @id @default(cuid())
+  board      Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  boardId    String
+
+  username   String
+  // Numeric score used for ranking (e.g. total wagered)
+  score      Float    @default(0)
+  // Free-text prize shown next to the entry, e.g. "$1350"
+  prize      String   @default("")
+  avatarUrl  String   @default("")
+  // Optional pinned position; when null, ranking is by score desc
+  position   Int?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([boardId])
+}

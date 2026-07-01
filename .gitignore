@@ -1,0 +1,17 @@
+# deps
+/node_modules
+# next
+/.next
+/out
+# env
+.env
+.env*.local
+# db
+/prisma/*.db
+/prisma/*.db-journal
+*.sqlite
+# misc
+.DS_Store
+*.log
+/coverage
+next-env.d.ts
