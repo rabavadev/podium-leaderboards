@@ -1,14 +1,123 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { isAdmin, checkPassword, startSession, endSession } from "@/lib/auth";
+import {
+  getCurrentUser,
+  startSession,
+  endSession,
+  hashPassword,
+  verifyPassword,
+  isValidEmail,
+  shouldBecomeHost,
+} from "@/lib/auth";
+import { getStripe, stripeEnabled, siteUrl, PRO_PLAN, boardLimit } from "@/lib/stripe";
 import { slugify } from "@/lib/format";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-/** Throw unless the caller is the master admin, or holds this board's editor token. */
-async function assertCanEditBoard(boardId: string, token?: string | null) {
-  if (isAdmin()) return;
+/* ===================== Auth (user accounts) ===================== */
+
+export async function signupAction(formData: FormData) {
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const password = String(formData.get("password") ?? "");
+  const name = String(formData.get("name") ?? "").trim();
+
+  if (!isValidEmail(email)) redirect("/signup?error=invalid_email");
+  if (password.length < 8) redirect("/signup?error=weak_password");
+
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) redirect("/login?error=exists");
+
+  const passwordHash = hashPassword(password);
+  const isHost = await shouldBecomeHost(email);
+
+  const user = await prisma.user.create({
+    data: { email, passwordHash, name, isHost, plan: isHost ? PRO_PLAN : "free" },
+  });
+
+  await startSession(user.id);
+  revalidatePath("/dashboard");
+  redirect("/dashboard");
+}
+
+export async function loginAction(formData: FormData) {
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const password = String(formData.get("password") ?? "");
+
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    redirect("/login?error=invalid");
+  }
+  await startSession(user.id);
+  revalidatePath("/dashboard");
+  redirect("/dashboard");
+}
+
+export async function logoutAction() {
+  endSession();
+  redirect("/");
+}
+
+/* ===================== Stripe billing ===================== */
+
+/** Create a Stripe Checkout session for the Pro plan (subscription mode). */
+export async function createCheckoutAction() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const stripe = getStripe();
+  const priceId = process.env.STRIPE_PRO_PRICE_ID;
+  if (!stripe || !priceId) {
+    redirect("/dashboard?error=stripe_not_configured");
+  }
+
+  // Reuse or create the Stripe customer
+  let customerId = user.stripeCustomerId;
+  if (!customerId) {
+    const customer = await stripe.customers.create({
+      email: user.email,
+      metadata: { userId: user.id },
+    });
+    customerId = customer.id;
+    await prisma.user.update({ where: { id: user.id }, data: { stripeCustomerId: customerId } });
+  }
+
+  const session = await stripe.checkout.sessions.create({
+    mode: "subscription",
+    customer: customerId,
+    line_items: [{ price: priceId, quantity: 1 }],
+    success_url: `${siteUrl()}/dashboard?upgrade=success`,
+    cancel_url: `${siteUrl()}/dashboard?upgrade=cancelled`,
+    metadata: { userId: user.id },
+  });
+
+  if (session.url) redirect(session.url);
+  redirect("/dashboard?error=checkout_failed");
+}
+
+/** Open the Stripe customer portal (manage card, cancel). */
+export async function createPortalAction() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  const stripe = getStripe();
+  if (!stripe || !user.stripeCustomerId) redirect("/dashboard?error=stripe_not_configured");
+
+  const session = await stripe.billingPortal.sessions.create({
+    customer: user.stripeCustomerId,
+    return_url: `${siteUrl()}/dashboard`,
+  });
+  if (session.url) redirect(session.url);
+  redirect("/dashboard?error=portal_failed");
+}
+
+/* ===================== Boards (scoped to user) ===================== */
+
+async function assertCanEditBoard(boardId: string, token?: string | null, user?: { id: string; isHost: boolean } | null) {
+  if (user?.isHost) return;
+  if (user) {
+    const board = await prisma.board.findUnique({ where: { id: boardId }, select: { userId: true } });
+    if (board && board.userId === user.id) return;
+  }
   if (token) {
     const board = await prisma.board.findUnique({ where: { id: boardId }, select: { editorToken: true } });
     if (board && board.editorToken === token) return;
@@ -16,49 +125,33 @@ async function assertCanEditBoard(boardId: string, token?: string | null) {
   throw new Error("Not authorized to edit this board.");
 }
 
-async function assertAdmin() {
-  if (!isAdmin()) throw new Error("Admin only.");
-}
-
-/* ----------------------------- Auth ----------------------------- */
-
-export async function loginAction(formData: FormData) {
-  const password = String(formData.get("password") ?? "");
-  if (!checkPassword(password)) {
-    redirect("/admin/login?error=1");
-  }
-  startSession();
-  redirect("/admin");
-}
-
-export async function logoutAction() {
-  endSession();
-  redirect("/admin/login");
-}
-
-/* ----------------------------- Boards ----------------------------- */
-
 export async function createBoardAction(formData: FormData) {
-  await assertAdmin();
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const title = String(formData.get("title") ?? "").trim() || "New Leaderboard";
   let slug = slugify(String(formData.get("slug") ?? "") || title);
-
-  // Ensure slug is unique
   let n = 1;
   const base = slug;
-  while (await prisma.board.findUnique({ where: { slug } })) {
-    slug = `${base}-${n++}`;
+  while (await prisma.board.findUnique({ where: { slug } })) slug = `${base}-${n++}`;
+
+  // Plan limit
+  const owned = await prisma.board.count({ where: { userId: user.id } });
+  if (!user.isHost && owned >= boardLimit(user.plan)) {
+    redirect("/dashboard?error=plan_limit");
   }
 
-  const board = await prisma.board.create({ data: { title, slug } });
-  revalidatePath("/admin");
-  redirect(`/admin/boards/${board.id}`);
+  const board = await prisma.board.create({ data: { title, slug, userId: user.id } });
+  revalidatePath("/dashboard");
+  redirect(`/dashboard/boards/${board.id}`);
 }
 
 export async function updateBoardAction(formData: FormData) {
   const id = String(formData.get("id") ?? "");
   const token = formData.get("token") ? String(formData.get("token")) : null;
-  await assertCanEditBoard(id, token);
+  const user = await getCurrentUser();
+
+  await assertCanEditBoard(id, token, user);
 
   const data: Record<string, unknown> = {
     title: String(formData.get("title") ?? "").trim(),
@@ -76,8 +169,10 @@ export async function updateBoardAction(formData: FormData) {
     isPublic: formData.get("isPublic") === "on",
   };
 
-  // Only the admin may change the slug and socials
-  if (isAdmin()) {
+  // Only the owner or host may change slug + socials
+  const board = await prisma.board.findUnique({ where: { id }, select: { userId: true } });
+  const isOwnerOrHost = user && (board?.userId === user.id || user.isHost);
+  if (isOwnerOrHost) {
     const rawSlug = String(formData.get("slug") ?? "").trim();
     if (rawSlug) {
       const slug = slugify(rawSlug);
@@ -92,31 +187,41 @@ export async function updateBoardAction(formData: FormData) {
     data.socials = JSON.stringify(socials);
   }
 
-  const board = await prisma.board.update({ where: { id }, data });
-  revalidatePath(`/${board.slug}`);
-  revalidatePath(`/admin/boards/${id}`);
+  const updated = await prisma.board.update({ where: { id }, data });
+  revalidatePath(`/${updated.slug}`);
+  revalidatePath(`/dashboard/boards/${id}`);
   if (token) revalidatePath(`/edit/${token}`);
 }
 
 export async function deleteBoardAction(formData: FormData) {
-  await assertAdmin();
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
   const id = String(formData.get("id") ?? "");
+  const board = await prisma.board.findUnique({ where: { id }, select: { userId: true } });
+  if (!board || (board.userId !== user.id && !user.isHost)) {
+    throw new Error("Not authorized.");
+  }
   await prisma.board.delete({ where: { id } });
-  revalidatePath("/admin");
-  redirect("/admin");
+  revalidatePath("/dashboard");
+  redirect("/dashboard");
 }
 
 export async function regenerateSecretAction(formData: FormData) {
-  await assertAdmin();
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
   const id = String(formData.get("id") ?? "");
+  const board = await prisma.board.findUnique({ where: { id }, select: { userId: true } });
+  if (!board || (board.userId !== user.id && !user.isHost)) {
+    throw new Error("Not authorized.");
+  }
   const which = String(formData.get("which") ?? "");
   const fresh = crypto.randomUUID().replace(/-/g, "");
   if (which === "editor") await prisma.board.update({ where: { id }, data: { editorToken: fresh } });
   if (which === "api") await prisma.board.update({ where: { id }, data: { apiKey: fresh } });
-  revalidatePath(`/admin/boards/${id}`);
+  revalidatePath(`/dashboard/boards/${id}`);
 }
 
-/* ----------------------------- Entries ----------------------------- */
+/* ===================== Entries ===================== */
 
 async function boardIdForEntry(entryId: string): Promise<string | null> {
   const e = await prisma.entry.findUnique({ where: { id: entryId }, select: { boardId: true } });
@@ -126,14 +231,15 @@ async function boardIdForEntry(entryId: string): Promise<string | null> {
 async function revalidateBoard(boardId: string, token?: string | null) {
   const b = await prisma.board.findUnique({ where: { id: boardId }, select: { slug: true } });
   if (b) revalidatePath(`/${b.slug}`);
-  revalidatePath(`/admin/boards/${boardId}`);
+  revalidatePath(`/dashboard/boards/${boardId}`);
   if (token) revalidatePath(`/edit/${token}`);
 }
 
 export async function addEntryAction(formData: FormData) {
   const boardId = String(formData.get("boardId") ?? "");
   const token = formData.get("token") ? String(formData.get("token")) : null;
-  await assertCanEditBoard(boardId, token);
+  const user = await getCurrentUser();
+  await assertCanEditBoard(boardId, token, user);
 
   const username = String(formData.get("username") ?? "").trim();
   if (!username) return;
@@ -152,9 +258,10 @@ export async function addEntryAction(formData: FormData) {
 export async function updateEntryAction(formData: FormData) {
   const entryId = String(formData.get("entryId") ?? "");
   const token = formData.get("token") ? String(formData.get("token")) : null;
+  const user = await getCurrentUser();
   const boardId = await boardIdForEntry(entryId);
   if (!boardId) return;
-  await assertCanEditBoard(boardId, token);
+  await assertCanEditBoard(boardId, token, user);
 
   await prisma.entry.update({
     where: { id: entryId },
@@ -171,21 +278,19 @@ export async function updateEntryAction(formData: FormData) {
 export async function deleteEntryAction(formData: FormData) {
   const entryId = String(formData.get("entryId") ?? "");
   const token = formData.get("token") ? String(formData.get("token")) : null;
+  const user = await getCurrentUser();
   const boardId = await boardIdForEntry(entryId);
   if (!boardId) return;
-  await assertCanEditBoard(boardId, token);
+  await assertCanEditBoard(boardId, token, user);
   await prisma.entry.delete({ where: { id: entryId } });
   await revalidateBoard(boardId, token);
 }
 
-/**
- * Bulk import. Paste rows of "username, score, prize" (one per line).
- * Existing usernames are updated (upsert by username); new ones are created.
- */
 export async function bulkImportAction(formData: FormData) {
   const boardId = String(formData.get("boardId") ?? "");
   const token = formData.get("token") ? String(formData.get("token")) : null;
-  await assertCanEditBoard(boardId, token);
+  const user = await getCurrentUser();
+  await assertCanEditBoard(boardId, token, user);
 
   const raw = String(formData.get("csv") ?? "");
   const rows = raw
@@ -208,4 +313,24 @@ export async function bulkImportAction(formData: FormData) {
     }
   }
   await revalidateBoard(boardId, token);
+}
+
+/* ===================== Host actions ===================== */
+
+export async function hostTogglePlanAction(formData: FormData) {
+  const user = await getCurrentUser();
+  if (!user?.isHost) redirect("/login");
+  const userId = String(formData.get("userId") ?? "");
+  const plan = String(formData.get("plan") ?? "free") === PRO_PLAN ? PRO_PLAN : "free";
+  await prisma.user.update({ where: { id: userId }, data: { plan } });
+  revalidatePath("/host");
+}
+
+export async function hostDeleteUserAction(formData: FormData) {
+  const user = await getCurrentUser();
+  if (!user?.isHost) redirect("/login");
+  const userId = String(formData.get("userId") ?? "");
+  if (userId === user.id) redirect("/host?error=self");
+  await prisma.user.delete({ where: { id: userId } });
+  revalidatePath("/host");
 }

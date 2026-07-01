@@ -26,7 +26,7 @@ export default async function Home() {
           leaderboard in minutes. Update it by hand, by CSV, or by API.
         </p>
         <div className="mt-8 flex justify-center gap-3">
-          <Link href="/admin" className="btn-gold">Create a leaderboard</Link>
+          <Link href="/signup" className="btn-gold">Start free</Link>
           {boards[0] ? (
             <Link href={`/${boards[0].slug}`} className="btn-ghost">See a live example</Link>
           ) : null}
@@ -37,7 +37,7 @@ export default async function Home() {
         <h2 className="mb-4 text-xs font-bold uppercase tracking-widest text-slate-500">Live boards</h2>
         {boards.length === 0 ? (
           <div className="card px-6 py-14 text-center text-sm text-slate-500">
-            No public boards yet. <Link href="/admin" className="text-gold-400">Create the first one →</Link>
+            No public boards yet. <Link href="/signup" className="text-gold-400">Create the first one →</Link>
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">

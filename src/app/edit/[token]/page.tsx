@@ -26,7 +26,7 @@ export default async function EditByToken({ params }: { params: { token: string 
       <p className="mb-6 text-sm text-slate-500">
         You can update entries and content for this board. Keep this link private.
       </p>
-      <BoardEditor board={board} entries={board.entries} isAdmin={false} token={params.token} baseUrl={baseUrlFromHeaders()} />
+      <BoardEditor board={board} entries={board.entries} canManageSocials={false} token={params.token} baseUrl={baseUrlFromHeaders()} />
     </main>
   );
 }

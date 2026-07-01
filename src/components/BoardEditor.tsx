@@ -43,13 +43,13 @@ const SOCIAL_KEYS = ["kick", "youtube", "twitch", "instagram", "discord", "teleg
 export function BoardEditor({
   board,
   entries,
-  isAdmin,
+  canManageSocials,
   token,
   baseUrl,
 }: {
   board: Board;
   entries: Entry[];
-  isAdmin: boolean;
+  canManageSocials: boolean;
   token?: string;
   baseUrl: string;
 }) {
@@ -70,7 +70,7 @@ export function BoardEditor({
             <input className="input" name="title" defaultValue={board.title} />
           </div>
 
-          {isAdmin ? (
+          {canManageSocials ? (
             <div>
               <label className="label">Slug (public URL)</label>
               <input className="input" name="slug" defaultValue={board.slug} />
@@ -124,7 +124,7 @@ export function BoardEditor({
             <input className="input" name="logoUrl" defaultValue={board.logoUrl} placeholder="https://..." />
           </div>
 
-          {isAdmin ? (
+          {canManageSocials ? (
             <div className="sm:col-span-2">
               <label className="label">Social links</label>
               <div className="grid gap-2 sm:grid-cols-3">
@@ -220,7 +220,7 @@ export function BoardEditor({
       </section>
 
       {/* Admin-only: sharing + danger zone */}
-      {isAdmin ? (
+      {canManageSocials ? (
         <section className="card p-6">
           <h2 className="mb-4 text-lg font-bold text-white">Share &amp; integrate</h2>
           <div className="space-y-4 text-sm">

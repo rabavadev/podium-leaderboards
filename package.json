@@ -1,8 +1,8 @@
 {
   "name": "podium-leaderboards",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Podium — a self-hostable SaaS for hosting live, editable leaderboards (casino/affiliate/streamer style).",
+  "description": "Podium — a self-hostable, subscription-ready SaaS for hosting live, editable leaderboards.",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -20,7 +20,8 @@
     "@prisma/client": "^5.22.0",
     "next": "14.2.15",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "stripe": "^14.25.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
